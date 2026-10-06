@@ -173,6 +173,8 @@ td:last-child, th:last-child { text-align: right; }
 (function() {
   var dialogEl = document.getElementById('dialog');
   var dialogText = document.getElementById('dialog-text');
+  var btnYes = document.getElementById('btn-yes');
+  var btnNo = document.getElementById('btn-no');
   var pendingId = null;
 
   document.querySelectorAll('.tab').forEach(function(tab) {
@@ -200,42 +202,40 @@ td:last-child, th:last-child { text-align: right; }
     dialogEl.classList.add('show');
   });
 
+  btnYes.addEventListener('click', function(e) {
+    e.stopPropagation();
+    if (!pendingId) return;
+    var id = pendingId;
+    pendingId = null;
+    dialogEl.classList.remove('show');
+
+    var el = document.querySelector('[data-id="' + id + '"]');
+    if (!el) return;
+
+    el.classList.add('used');
+    if (!el.querySelector('.undo-btn')) {
+      var btn = document.createElement('button');
+      btn.className = 'undo-btn';
+      btn.type = 'button';
+      btn.textContent = '戻す';
+      el.appendChild(btn);
+    }
+
+    fetch('/api/inventory', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: id })
+    });
+  });
+
+  btnNo.addEventListener('click', function(e) {
+    e.stopPropagation();
+    pendingId = null;
+    dialogEl.classList.remove('show');
+  });
+
   dialogEl.addEventListener('click', function(e) {
-    var target = e.target;
-
-    if (target.id === 'btn-yes') {
-      if (!pendingId) return;
-      var id = pendingId;
-      pendingId = null;
-      dialogEl.classList.remove('show');
-
-      var el = document.querySelector('[data-id="' + id + '"]');
-      if (!el) return;
-
-      el.classList.add('used');
-      if (!el.querySelector('.undo-btn')) {
-        var btn = document.createElement('button');
-        btn.className = 'undo-btn';
-        btn.type = 'button';
-        btn.textContent = '戻す';
-        el.appendChild(btn);
-      }
-
-      fetch('/api/inventory', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: id })
-      });
-      return;
-    }
-
-    if (target.id === 'btn-no') {
-      pendingId = null;
-      dialogEl.classList.remove('show');
-      return;
-    }
-
-    if (target === dialogEl) {
+    if (e.target === dialogEl) {
       pendingId = null;
       dialogEl.classList.remove('show');
     }
