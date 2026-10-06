@@ -171,7 +171,7 @@ td:last-child, th:last-child { text-align: right; }
 </div>
 <script>
 (function() {
-  var dialog = document.getElementById('dialog');
+  var dialogEl = document.getElementById('dialog');
   var dialogText = document.getElementById('dialog-text');
   var pendingId = null;
 
@@ -185,55 +185,60 @@ td:last-child, th:last-child { text-align: right; }
   });
 
   document.getElementById('stock').addEventListener('click', function(e) {
-    var item = e.target.closest('.item');
-    if (!item) return;
-
-    if (e.target.closest('.undo-btn')) {
-      doUndo(item);
+    var undoBtn = e.target.closest('.undo-btn');
+    if (undoBtn) {
+      var item = undoBtn.closest('.item');
+      if (item) doUndo(item);
       return;
     }
 
-    if (item.classList.contains('used')) return;
+    var item = e.target.closest('.item');
+    if (!item || item.classList.contains('used')) return;
 
     pendingId = item.dataset.id;
     dialogText.textContent = item.querySelector('.name').textContent + ' 使った？';
-    dialog.classList.add('show');
+    dialogEl.classList.add('show');
   });
 
-  dialog.addEventListener('click', function(e) {
-    if (e.target === dialog) {
+  dialogEl.addEventListener('click', function(e) {
+    var target = e.target;
+
+    if (target.id === 'btn-yes') {
+      if (!pendingId) return;
+      var id = pendingId;
       pendingId = null;
-      dialog.classList.remove('show');
-    }
-  });
+      dialogEl.classList.remove('show');
 
-  document.getElementById('btn-no').addEventListener('click', function() {
-    pendingId = null;
-    dialog.classList.remove('show');
-  });
+      var el = document.querySelector('[data-id="' + id + '"]');
+      if (!el) return;
 
-  document.getElementById('btn-yes').addEventListener('click', function() {
-    if (!pendingId) return;
-    var id = pendingId;
-    pendingId = null;
-    dialog.classList.remove('show');
+      el.classList.add('used');
+      if (!el.querySelector('.undo-btn')) {
+        var btn = document.createElement('button');
+        btn.className = 'undo-btn';
+        btn.type = 'button';
+        btn.textContent = '戻す';
+        el.appendChild(btn);
+      }
 
-    var el = document.querySelector('[data-id="' + id + '"]');
-    if (!el) return;
-
-    el.classList.add('used');
-    if (!el.querySelector('.undo-btn')) {
-      var btn = document.createElement('button');
-      btn.className = 'undo-btn';
-      btn.textContent = '戻す';
-      el.appendChild(btn);
+      fetch('/api/inventory', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: id })
+      });
+      return;
     }
 
-    fetch('/api/inventory', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: id })
-    });
+    if (target.id === 'btn-no') {
+      pendingId = null;
+      dialogEl.classList.remove('show');
+      return;
+    }
+
+    if (target === dialogEl) {
+      pendingId = null;
+      dialogEl.classList.remove('show');
+    }
   });
 
   function doUndo(item) {
