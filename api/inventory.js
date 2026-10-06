@@ -10,7 +10,7 @@ export default async function handler(req, res) {
     return res.status(200).json({ ok: true });
   }
 
-  if (req.method === "GET" && req.url.includes("/api/inventory")) {
+  if (req.method === "GET") {
     const items = await getInventory();
 
     const inStock = items.filter((it) => it.used !== "TRUE");
