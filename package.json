@@ -1,0 +1,13 @@
+{
+  "name": "receipt-line",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vercel dev"
+  },
+  "dependencies": {
+    "@google/genai": "^2.24.0",
+    "@line/bot-sdk": "^9.0.0",
+    "googleapis": "^144.0.0"
+  }
+}
