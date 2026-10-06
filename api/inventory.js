@@ -2,10 +2,12 @@ import { getInventory, markUsed } from "../lib/sheets.js";
 
 export default async function handler(req, res) {
   if (req.method === "POST") {
-    const { id } = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
+    const body =
+      typeof req.body === "string" ? JSON.parse(req.body) : req.body;
+    const { id, undo } = body;
     if (!id) return res.status(400).json({ error: "id required" });
 
-    const ok = await markUsed(id);
+    const ok = await markUsed(id, !undo);
     if (!ok) return res.status(404).json({ error: "not found" });
     return res.status(200).json({ ok: true });
   }
@@ -77,12 +79,12 @@ function buildHTML(inStock, byMonth) {
 <style>
 :root {
   --bg: #fff; --fg: #222; --card: #f7f7f7; --border: #e0e0e0;
-  --accent: #2d7d46; --used: #bbb; --price: #666;
+  --accent: #2d7d46; --used: #999; --price: #666; --undo: #c44;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg: #1a1a1a; --fg: #e0e0e0; --card: #252525; --border: #333;
-    --accent: #5cb87a; --used: #555; --price: #999;
+    --accent: #5cb87a; --used: #666; --price: #999; --undo: #e66;
   }
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -90,6 +92,7 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", sans-serif;
   background: var(--bg); color: var(--fg);
   padding: 16px; max-width: 480px; margin: 0 auto;
+  padding-bottom: 80px;
 }
 h1 { font-size: 1.3rem; margin-bottom: 12px; }
 .tabs { display: flex; gap: 0; margin-bottom: 16px; }
@@ -105,26 +108,38 @@ h1 { font-size: 1.3rem; margin-bottom: 12px; }
 .item {
   display: flex; justify-content: space-between; align-items: center;
   padding: 12px; margin-bottom: 4px; border-radius: 8px;
-  background: var(--card); cursor: pointer; transition: opacity 0.2s;
+  background: var(--card); cursor: pointer; transition: all 0.3s;
   -webkit-user-select: none; user-select: none;
 }
 .item:active { opacity: 0.7; }
-.item.done { opacity: 0.4; text-decoration: line-through; pointer-events: none; }
-.name { font-size: 1rem; }
+.item.used {
+  opacity: 0.4; text-decoration: line-through;
+}
+.item.used .undo-btn { display: inline-block; }
+.name { font-size: 1rem; flex: 1; }
 .price { font-size: 0.9rem; color: var(--price); white-space: nowrap; }
+.undo-btn {
+  display: none; margin-left: 8px; padding: 4px 10px;
+  font-size: 0.8rem; border: 1px solid var(--undo); color: var(--undo);
+  background: transparent; border-radius: 4px; cursor: pointer;
+  text-decoration: none;
+}
 .empty { color: var(--price); text-align: center; padding: 40px 0; }
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--border); }
 th { font-size: 0.85rem; color: var(--price); }
 td:last-child, th:last-child { text-align: right; }
-.confirm {
-  position: fixed; bottom: 0; left: 0; right: 0;
-  background: var(--card); border-top: 1px solid var(--border);
-  padding: 16px; display: none; text-align: center;
+.dialog-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.4);
+  display: none; align-items: center; justify-content: center; z-index: 10;
 }
-.confirm.show { display: block; }
-.confirm p { margin-bottom: 12px; font-size: 0.95rem; }
-.confirm button {
+.dialog-overlay.show { display: flex; }
+.dialog {
+  background: var(--card); border-radius: 12px; padding: 24px;
+  text-align: center; width: 280px;
+}
+.dialog p { margin-bottom: 16px; font-size: 1rem; }
+.dialog button {
   padding: 10px 24px; border: none; border-radius: 8px; font-size: 1rem;
   cursor: pointer; margin: 0 6px;
 }
@@ -147,52 +162,93 @@ td:last-child, th:last-child { text-align: right; }
     <tbody>${monthRows || '<tr><td colspan="2" style="text-align:center">データなし</td></tr>'}</tbody>
   </table>
 </div>
-<div class="confirm" id="confirm">
-  <p id="confirm-text"></p>
-  <button class="btn-yes" id="btn-yes">使った</button>
-  <button class="btn-no" id="btn-no">まだ</button>
+<div class="dialog-overlay" id="dialog">
+  <div class="dialog">
+    <p id="dialog-text"></p>
+    <button class="btn-yes" id="btn-yes">使った</button>
+    <button class="btn-no" id="btn-no">まだある</button>
+  </div>
 </div>
 <script>
-document.querySelectorAll('.tab').forEach(tab => {
-  tab.addEventListener('click', () => {
-    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-    tab.classList.add('active');
-    document.getElementById(tab.dataset.tab).classList.add('active');
+(function() {
+  var dialog = document.getElementById('dialog');
+  var dialogText = document.getElementById('dialog-text');
+  var pendingId = null;
+
+  document.querySelectorAll('.tab').forEach(function(tab) {
+    tab.addEventListener('click', function() {
+      document.querySelectorAll('.tab').forEach(function(t) { t.classList.remove('active'); });
+      document.querySelectorAll('.panel').forEach(function(p) { p.classList.remove('active'); });
+      tab.classList.add('active');
+      document.getElementById(tab.dataset.tab).classList.add('active');
+    });
   });
-});
 
-let pendingId = null;
-const confirm = document.getElementById('confirm');
-const confirmText = document.getElementById('confirm-text');
+  document.getElementById('stock').addEventListener('click', function(e) {
+    var item = e.target.closest('.item');
+    if (!item) return;
 
-document.querySelectorAll('.item').forEach(el => {
-  el.addEventListener('click', () => {
-    pendingId = el.dataset.id;
-    confirmText.textContent = el.querySelector('.name').textContent + ' 使った？';
-    confirm.classList.add('show');
+    if (e.target.closest('.undo-btn')) {
+      doUndo(item);
+      return;
+    }
+
+    if (item.classList.contains('used')) return;
+
+    pendingId = item.dataset.id;
+    dialogText.textContent = item.querySelector('.name').textContent + ' 使った？';
+    dialog.classList.add('show');
   });
-});
 
-document.getElementById('btn-no').addEventListener('click', () => {
-  pendingId = null;
-  confirm.classList.remove('show');
-});
-
-document.getElementById('btn-yes').addEventListener('click', async () => {
-  if (!pendingId) return;
-  const id = pendingId;
-  confirm.classList.remove('show');
-  const el = document.querySelector('[data-id="' + id + '"]');
-  if (el) el.classList.add('done');
-
-  await fetch('/api/inventory', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id })
+  dialog.addEventListener('click', function(e) {
+    if (e.target === dialog) {
+      pendingId = null;
+      dialog.classList.remove('show');
+    }
   });
-  pendingId = null;
-});
+
+  document.getElementById('btn-no').addEventListener('click', function() {
+    pendingId = null;
+    dialog.classList.remove('show');
+  });
+
+  document.getElementById('btn-yes').addEventListener('click', function() {
+    if (!pendingId) return;
+    var id = pendingId;
+    pendingId = null;
+    dialog.classList.remove('show');
+
+    var el = document.querySelector('[data-id="' + id + '"]');
+    if (!el) return;
+
+    el.classList.add('used');
+    if (!el.querySelector('.undo-btn')) {
+      var btn = document.createElement('button');
+      btn.className = 'undo-btn';
+      btn.textContent = '戻す';
+      el.appendChild(btn);
+    }
+
+    fetch('/api/inventory', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: id })
+    });
+  });
+
+  function doUndo(item) {
+    var id = item.dataset.id;
+    item.classList.remove('used');
+    var btn = item.querySelector('.undo-btn');
+    if (btn) btn.remove();
+
+    fetch('/api/inventory', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: id, undo: true })
+    });
+  }
+})();
 </script>
 </body>
 </html>`;
