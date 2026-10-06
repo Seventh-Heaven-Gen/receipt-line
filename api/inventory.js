@@ -1,19 +1,49 @@
 import { getInventory, markUsed } from "../lib/sheets.js";
+import { findActiveByPageToken } from "../lib/users.js";
+
+function tokenFromQuery(req) {
+  if (req.query && typeof req.query.t === "string") return req.query.t;
+  try {
+    return new URL(req.url, "http://localhost").searchParams.get("t") || "";
+  } catch {
+    return "";
+  }
+}
+
+function forbidden(res) {
+  return res
+    .status(403)
+    .setHeader("Content-Type", "text/html; charset=utf-8")
+    .send(
+      `<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>在庫</title></head><body style="font-family:sans-serif;padding:24px"><p>このURLは無効です。LINEで「在庫」と送って、URLを受け取り直してください。</p></body></html>`
+    );
+}
 
 export default async function handler(req, res) {
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("X-Robots-Tag", "noindex");
+
   if (req.method === "POST") {
     const body =
-      typeof req.body === "string" ? JSON.parse(req.body) : req.body;
+      typeof req.body === "string" ? JSON.parse(req.body) : req.body || {};
+    const user = await findActiveByPageToken(body.t);
+    if (!user) return res.status(403).json({ error: "forbidden" });
+
     const { id, undo } = body;
     if (!id) return res.status(400).json({ error: "id required" });
 
-    const ok = await markUsed(id, !undo);
+    const ok = await markUsed(user.tab_name, id, !undo);
     if (!ok) return res.status(404).json({ error: "not found" });
     return res.status(200).json({ ok: true });
   }
 
   if (req.method === "GET") {
-    const items = await getInventory();
+    const token = tokenFromQuery(req);
+    const user = await findActiveByPageToken(token);
+    if (!user) return forbidden(res);
+
+    const items = await getInventory(user.tab_name);
 
     const inStock = items.filter((it) => it.used !== "TRUE");
     const allItems = items;
@@ -29,13 +59,13 @@ export default async function handler(req, res) {
       return res.status(200).json({ inStock, byMonth });
     }
 
-    return res.status(200).send(buildHTML(inStock, byMonth));
+    return res.status(200).send(buildHTML(inStock, byMonth, token));
   }
 
   res.status(405).send("Method Not Allowed");
 }
 
-function buildHTML(inStock, byMonth) {
+function buildHTML(inStock, byMonth, token) {
   const grouped = {};
   for (const it of inStock) {
     const key = `${it.store}（${it.date}）`;
@@ -75,6 +105,8 @@ function buildHTML(inStock, byMonth) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex">
 <title>在庫</title>
 <style>
 :root {
@@ -171,6 +203,7 @@ td:last-child, th:last-child { text-align: right; }
 </div>
 <script>
 (function() {
+  var TOKEN = ${JSON.stringify(token)};
   var dialogEl = document.getElementById('dialog');
   var dialogText = document.getElementById('dialog-text');
   var btnYes = document.getElementById('btn-yes');
@@ -224,7 +257,7 @@ td:last-child, th:last-child { text-align: right; }
     fetch('/api/inventory', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: id })
+      body: JSON.stringify({ t: TOKEN, id: id })
     });
   });
 
@@ -250,7 +283,7 @@ td:last-child, th:last-child { text-align: right; }
     fetch('/api/inventory', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: id, undo: true })
+      body: JSON.stringify({ t: TOKEN, id: id, undo: true })
     });
   }
 })();

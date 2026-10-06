@@ -2,5 +2,8 @@
   "rewrites": [
     { "source": "/api/webhook", "destination": "/api/webhook" },
     { "source": "/inventory", "destination": "/api/inventory" }
+  ],
+  "crons": [
+    { "path": "/api/cron-cleanup", "schedule": "0 18 * * *" }
   ]
 }
