@@ -32,6 +32,7 @@ export default async function handler(req, res) {
   const { rows } = await readTable(user.tab_name);
   const lines = [LABELS.map(csvCell).join(",")];
   for (const r of rows) {
+    if (r.deleted === "TRUE") continue;
     lines.push(COLUMNS.map((c) => csvCell(r[c])).join(","));
   }
 

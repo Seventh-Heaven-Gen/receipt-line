@@ -1,6 +1,10 @@
 import crypto from "node:crypto";
 import { ocrReceipt } from "../lib/ocr.js";
-import { appendItems } from "../lib/sheets.js";
+import {
+  appendItems,
+  findLastReceipt,
+  markReceiptDeleted,
+} from "../lib/sheets.js";
 import {
   ADMIN_USER_ID,
   INVITE_DAYS,
@@ -37,6 +41,32 @@ const MSG = {
   withdrawn: "退会処理が完了しています。ご利用ありがとうございました。",
   adminCannotWithdraw: "管理者アカウントは退会できません。",
   withdrawCanceled: "退会をキャンセルしました。",
+  nothingToUndo: "取り消せるレシートがありません。",
+  undoCanceled: "キャンセルしました。",
+  undoAlready: "すでに取り消されています。",
+};
+
+// 全角・半角、空白、末尾の記号、カタカナ／ひらがなの違いを吸収してコマンドを比べる
+function normalizeCommand(text) {
+  return String(text)
+    .normalize("NFKC")
+    .replace(/\s+/g, "")
+    .replace(/[!?。．、,~〜♪]+$/u, "")
+    .replace(/[ァ-ヶ]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x60));
+}
+
+const COMMANDS = {
+  stock: new Set(["在庫", "ざいこ"]),
+  withdraw: new Set(["退会", "たいかい"]),
+  undo: new Set([
+    "取り消し",
+    "取消",
+    "取消し",
+    "取り消す",
+    "取り消して",
+    "とりけし",
+    "削除",
+  ]),
 };
 
 function readRawBody(req) {
@@ -214,14 +244,69 @@ async function handleAdminText(text, replyToken) {
   return false;
 }
 
+async function handleUndoRequest(user, replyToken) {
+  const last = await findLastReceipt(user.tab_name);
+  if (!last) {
+    await replyMessage(replyToken, MSG.nothingToUndo);
+    return;
+  }
+  const names = last.items.slice(0, 3).map((it) => it.item).join("、");
+  const more = last.items.length > 3 ? " ほか" : "";
+  const body =
+    `直前のレシートを取り消しますか？\n${last.store}（${last.date}）\n${last.items.length}品目：${names}${more}`.slice(
+      0,
+      230
+    );
+  await replyMessage(replyToken, {
+    type: "template",
+    altText: "レシートの取り消しの確認",
+    template: {
+      type: "confirm",
+      text: body,
+      actions: [
+        {
+          type: "postback",
+          label: "はい",
+          data: `rc_undo:${last.created_at}`,
+          displayText: "はい",
+        },
+        {
+          type: "postback",
+          label: "いいえ",
+          data: "rc_undo_cancel",
+          displayText: "いいえ",
+        },
+      ],
+    },
+  });
+}
+
+async function handleUndoExecute(user, createdAt, replyToken) {
+  const removed = await markReceiptDeleted(user.tab_name, createdAt);
+  if (removed.length === 0) {
+    await replyMessage(replyToken, MSG.undoAlready);
+    return;
+  }
+  await replyMessage(
+    replyToken,
+    `${removed[0].store}（${removed[0].date}）の${removed.length}品目を取り消しました。`
+  );
+}
+
 async function handleText(user, text, replyToken, isAdmin) {
   if (isAdmin && (await handleAdminText(text, replyToken))) return;
 
-  if (text === "在庫" || text === "ざいこ") {
+  const cmd = normalizeCommand(text);
+
+  if (COMMANDS.stock.has(cmd)) {
     await replyMessage(replyToken, inventoryUrl(user));
     return;
   }
-  if (text === "退会") {
+  if (COMMANDS.undo.has(cmd)) {
+    await handleUndoRequest(user, replyToken);
+    return;
+  }
+  if (COMMANDS.withdraw.has(cmd)) {
     if (user.user_id === ADMIN_USER_ID) {
       await replyMessage(replyToken, MSG.adminCannotWithdraw);
       return;
@@ -233,6 +318,14 @@ async function handleText(user, text, replyToken, isAdmin) {
 }
 
 async function handlePostback(user, data, replyToken) {
+  if (data === "rc_undo_cancel") {
+    await replyMessage(replyToken, MSG.undoCanceled);
+    return;
+  }
+  if (data.startsWith("rc_undo:")) {
+    await handleUndoExecute(user, data.slice("rc_undo:".length), replyToken);
+    return;
+  }
   if (data === "wd:cancel") {
     await replyMessage(replyToken, MSG.withdrawCanceled);
     return;
